@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>✅ Payment Successful</title>
+  <style>
+    body {background:#071025;color:#e6eef6;font-family:Inter,system-ui,Arial;display:flex;align-items:center;justify-content:center;height:100vh;}
+    .card{background:#0b1633;padding:40px;border-radius:12px;text-align:center;box-shadow:0 0 10px #00ffe050;max-width:560px}
+    h1{color:#00ffe0;margin:0 0 12px}
+    .muted{color:#9aa3b2}
+    a{color:#00ffe0;text-decoration:none;font-weight:700}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>✅ Payment Successful!</h1>
+    <p id="details" class="muted">Loading payment details…</p>
+    <p class="muted">Returning to the map in a moment…</p>
+    <p><a href="/">⬅ Back to main map</a></p>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    const sessionId = params.get("session_id");
+    const ownedTilesKey = "pwm_owned_tiles_v1";
+
+    async function run(){
+      try{
+        const res = await fetch(`/api/get-session?session_id=${sessionId}`);
+        const data = await res.json();
+        if(data.error){ document.getElementById("details").textContent = "⚠️ " + data.error; return; }
+
+        const meta = data.metadata || {};
+        let tiles = [];
+        try { tiles = JSON.parse(meta.tiles || "[]"); } catch(e) { tiles = []; }
+
+        // merge owned tiles
+        const cur = new Set(JSON.parse(localStorage.getItem(ownedTilesKey) || "[]"));
+        tiles.forEach(t => cur.add(t));
+        localStorage.setItem(ownedTilesKey, JSON.stringify([...cur]));
+
+        document.getElementById("details").innerHTML =
+          `🧩 <b>${tiles.length}</b> tile(s) claimed in <b>${meta.countryName || "country"}</b>.`;
+
+        setTimeout(()=> location.href = "/", 2200);
+      }catch(e){
+        document.getElementById("details").textContent = "Failed to load payment info.";
+        console.error(e);
+      }
+    }
+    run();
+  </script>
+</body>
+</html>

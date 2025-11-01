@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>🌍 PixelWorldMap — v4.6b (Local Mode + Leaderboard)</title>
+
+  <!-- libs -->
+  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
+  <script src="https://js.stripe.com/v3/"></script>
+
+  <style>
+    :root {
+      --bg:#050d22; --panel:#0b1633; --ink:#e6eef6; --muted:#9aa3b2;
+      --tile:#133366; --tileSel:#00c3ff; --tileOwned:#072d2d; --accent:#00ffe0;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,Arial;overflow:hidden}
+    header{display:flex;justify-content:space-between;align-items:center;padding:14px 20px;background:#06122b;border-bottom:1px solid #0f214d}
+    #wrap{display:grid;grid-template-columns:1fr 380px;height:calc(100vh - 56px)}
+    svg{width:100%;height:100%}
+    .country{fill:rgba(12,28,69,.3);stroke:#1f3d7a;stroke-width:.6;cursor:pointer;transition:stroke .15s ease}
+    .country:hover{stroke:#2f6dff}
+    .tile{fill:var(--tile);stroke:#1f3d7a;stroke-width:.35;cursor:pointer;opacity:.85}
+    .tile.selected{fill:var(--tileSel)}
+    .tile.owned{fill:var(--tileOwned);stroke:#1ddcc7;filter:drop-shadow(0 0 6px #00ffff);animation:pulse 2.6s infinite ease-in-out}
+    @keyframes pulse{0%{filter:drop-shadow(0 0 4px #00ffff)}50%{filter:drop-shadow(0 0 14px #00ffff)}100%{filter:drop-shadow(0 0 4px #00ffff)}}
+    #side{background:var(--panel);border-left:1px solid #0f214d;padding:18px;display:flex;flex-direction:column;gap:16px;overflow-y:auto}
+    .box{background:#0a1430;border:1px solid #24418a;border-radius:12px;padding:12px}
+    .muted{color:var(--muted);font-size:13px}
+    input{width:100%;padding:9px 10px;border:1px solid #24418a;border-radius:8px;background:#08132c;color:var(--ink)}
+    .btn{background:var(--accent);color:#002;border:none;padding:10px 14px;border-radius:8px;cursor:pointer;font-weight:700}
+    .btn:disabled{opacity:.4;cursor:not-allowed}
+    #buyRow{display:flex;gap:8px;margin-top:10px}
+    #clearBtn{background:#0a244e;color:#b9c6dc}
+    .card{position:fixed;min-width:220px;max-width:280px;background:#0b1c40;border:1px solid #00ffe0;border-radius:12px;padding:12px;box-shadow:0 8px 28px rgba(0,0,0,.45);z-index:9999;color:#e6eef6;animation:pop .12s ease}
+    .card h4{margin:0 0 6px 0;font-size:16px}
+    .card a{color:#00ffe0;text-decoration:none}
+    .card img{max-width:120px;display:block;margin-top:8px;border-radius:6px}
+    .card .x{position:absolute;right:8px;top:6px;background:#07233f;border:1px solid #0ea;color:#0ea;width:22px;height:22px;border-radius:6px;cursor:pointer;display:grid;place-items:center;font-size:12px}
+    @keyframes pop{from{transform:scale(.96);opacity:0}to{transform:scale(1);opacity:1}}
+    #leaderboard .entry{display:flex;align-items:center;gap:8px;margin:6px 0;padding:6px 6px;border-radius:8px;cursor:pointer}
+    #leaderboard .entry:hover{background:rgba(0,255,255,0.06)}
+    #leaderboard img{width:20px;height:20px;border-radius:4px}
+    #leaderboard a{color:#00ffe0;text-decoration:none;font-weight:600}
+    #leaderboard .name{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    #leaderboard .km{margin-left:auto;color:#9aa3b2}
+  </style>
+</head>
+
+<body>
+<header>
+  <div>🌍 <b>PixelWorldMap</b> — 1 km² = 1 tile</div>
+  <div class="muted"><span id="ownedCount">0</span> tiles owned • test mode</div>
+</header>
+
+<div id="wrap">
+  <svg id="world">
+    <g id="countriesLayer"></g>
+    <g id="tilesLayer"></g>
+  </svg>
+
+  <aside id="side">
+    <div class="box">
+      <div class="muted">Selected country</div>
+      <div id="selCountry" style="font-size:18px;margin-top:4px">—</div>
+      <div id="selCode" class="muted" style="margin-top:2px">—</div>
+    </div>
+
+    <div class="box">
+      <div class="muted">Choose tiles (click to toggle)</div>
+      <div id="selCount" class="muted">0 selected</div>
+      <label style="margin-top:10px">Display name</label>
+      <input id="nameInput" placeholder="Your name / brand">
+      <label>Website (optional)</label>
+      <input id="linkInput" placeholder="https://…">
+      <label>Logo URL (optional)</label>
+      <input id="logoInput" placeholder="https://…/logo.png">
+      <div id="buyRow">
+        <button id="buyBtn" class="btn" disabled>Buy selected tiles (€1/tile)</button>
+        <button id="clearBtn" class="btn" disabled>Clear</button>
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="muted" style="margin-bottom:6px;">🏆 Top buyers</div>
+      <div id="leaderboard" class="muted"></div>
+    </div>
+  </aside>
+</div>
+
+<script>
+const WORLD_URL="https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json";
+const svg=d3.select("#world"), gCountries=d3.select("#countriesLayer"), gTiles=d3.select("#tilesLayer");
+const projection=d3.geoNaturalEarth1(), path=d3.geoPath(projection);
+const zoom=d3.zoom().scaleExtent([1,12]).on("zoom",ev=>{gCountries.attr("transform",ev.transform);gTiles.attr("transform",ev.transform);});
+svg.call(zoom);
+
+const ownedKey="pwm_owned_tiles_v2";
+let ownedTiles=new Set(JSON.parse(localStorage.getItem(ownedKey)||"[]"));
+const saveOwned=()=>localStorage.setItem(ownedKey,JSON.stringify([...ownedTiles]));
+document.getElementById("ownedCount").textContent=ownedTiles.size;
+const tileDataKey="pwm_tile_data_v1";
+let tileData=JSON.parse(localStorage.getItem(tileDataKey)||"{}");
+const saveTileData=()=>localStorage.setItem(tileDataKey,JSON.stringify(tileData));
+const forbidden=["porn","sex","escort","casino","drugs","hate","weapon","violence","xxx","nsfw","scam"];
+const isSafeURL=u=>u&&!forbidden.some(w=>u.toLowerCase().includes(w));
+
+let selectedCountry=null,selectedTiles=new Set();
+const selCountryEl=document.getElementById("selCountry"),selCodeEl=document.getElementById("selCode"),
+selCountEl=document.getElementById("selCount"),buyBtn=document.getElementById("buyBtn"),
+clearBtn=document.getElementById("clearBtn"),nameInput=document.getElementById("nameInput"),
+linkInput=document.getElementById("linkInput"),logoInput=document.getElementById("logoInput");
+
+fetch(WORLD_URL).then(r=>r.json()).then(world=>{
+  const features=topojson.feature(world,world.objects.countries).features;
+  const w=window.innerWidth-380,h=window.innerHeight-56;
+  svg.attr("viewBox",`0 0 ${w} ${h}`);
+  projection.fitSize([w,h],{type:"Sphere"});
+  gCountries.selectAll("path").data(features).join("path").attr("d",path).attr("class","country").on("click",(e,d)=>selectCountry(d));
+  renderOwnedGlow();renderMiniLogos();updateLeaderboard();
+});
+
+function selectCountry(feat){
+  selectedCountry=feat;
+  selCountryEl.textContent=feat.properties.name;
+  selCodeEl.textContent=`ID: ${feat.id}`;
+  selectedTiles.clear();updateUI();
+  gTiles.selectAll("*").remove();
+  const area=d3.geoArea(feat)*510_000_000;
+  const total=Math.max(100,Math.round(area/5000));
+  const [[x0,y0],[x1,y1]]=path.bounds(feat);
+  const cell=Math.sqrt((x1-x0)*(y1-y0)/total);
+  const tiles=[];
+  for(let y=y0;y<y1;y+=cell){
+    for(let x=x0;x<x1;x+=cell){
+      const p=projection.invert([x+cell/2,y+cell/2]);
+      if(!p||!d3.geoContains(feat,p))continue;
+      const id=`${feat.id}:${x.toFixed(1)}:${y.toFixed(1)}`;
+      tiles.push({id,x,y,w:cell,h:cell});
+    }
+  }
+  gTiles.selectAll("rect").data(tiles,d=>d.id).join("rect")
+    .attr("class",d=>"tile"+(ownedTiles.has(d.id)?" owned":""))
+    .attr("x",d=>d.x).attr("y",d=>d.y)
+    .attr("width",d=>d.w).attr("height",d=>d.h)
+    .on("click",(e,d)=>{
+      if(ownedTiles.has(d.id)){openInfoCard(d,e);return;}
+      const sel=selectedTiles.has(d.id);
+      sel?selectedTiles.delete(d.id):selectedTiles.add(d.id);
+      d3.select(e.currentTarget).classed("selected",!sel);
+      updateUI();e.stopPropagation();
+    });
+  renderOwnedGlow();renderMiniLogos();
+}
+
+function updateUI(){
+  const n=selectedTiles.size;
+  selCountEl.textContent=`${n} selected`;
+  buyBtn.disabled=clearBtn.disabled=(n===0);
+}
+clearBtn.onclick=()=>{selectedTiles.clear();gTiles.selectAll(".selected").classed("selected",false);updateUI();};
+
+/* -------- Fallback Stripe/Local Purchase -------- */
+buyBtn.onclick=async()=>{
+  if(!selectedCountry||!selectedTiles.size)return;
+  const meta={country:selectedCountry.properties.name,tiles:[...selectedTiles],
+    name:nameInput.value||"Anonymous",link:linkInput.value,logo:logoInput.value};
+  try{
+    const res=await fetch("/api/create-checkout-session",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({quantity:meta.tiles.length,metadata:meta})
+    });
+    if(!res.ok) throw new Error("No backend");
+    const data=await res.json();
+    if(!data.sessionId){
+      alert("⚠️ Stripe inactive — local mode");
+      registerOwnedTiles(meta);return;
+    }
+    const stripe=Stripe("pk_test_51SLsj4Qjq3QsaWFaU9THUMnBjYA7yCCeqgb0Ft5it8cNMbUtdoFaNzAGE2pNjOPQ1w02qDxWTU7N7TtDeMBnkHN200sC6IG6Zg");
+    const {error}=await stripe.redirectToCheckout({sessionId:data.sessionId});
+    if(error)alert(error.message);
+  }catch(err){
+    console.warn("💡 Local purchase fallback",err);
+    registerOwnedTiles(meta);
+  }
+};
+
+/* ---------- Rendering ---------- */
+function renderOwnedGlow(){d3.selectAll(".tile").classed("owned",d=>ownedTiles.has(d.id));}
+function renderMiniLogos(){
+  svg.selectAll(".tile-logo").remove();
+  const logos=Object.entries(tileData).filter(([id,data])=>data.logo&&isSafeURL(data.logo));
+  logos.forEach(([id,data])=>{
+    const p=id.split(":");if(p.length<3)return;
+    svg.append("image").attr("class","tile-logo").attr("href",data.logo)
+      .attr("x",+p[1]).attr("y",+p[2]).attr("width",10).attr("height",10)
+      .attr("opacity",0.8).attr("pointer-events","none");
+  });
+}
+
+/* ---------- Info Card ---------- */
+let cardEl=null;
+function openInfoCard(tile,evt){
+  closeCard();
+  const info=tileData[tile.id]||{};
+  cardEl=document.createElement("div");
+  cardEl.className="card";
+  const safeLink=(info.link&&isSafeURL(info.link))?info.link:null;
+  cardEl.innerHTML=`<button class="x">✕</button>
+    <h4>${info.name||"Anonymous"}</h4>
+    <div class="muted">🌍 ${info.country||"—"}</div>
+    ${safeLink?`<div>🔗 <a href='${safeLink}' target='_blank'>Visit site</a></div>`:""}
+    ${info.logo&&isSafeURL(info.logo)?`<img src='${info.logo}' alt=''>`:""}`;
+  document.body.appendChild(cardEl);
+  const pad=14,cw=cardEl.offsetWidth||240,ch=cardEl.offsetHeight||160;
+  const x=Math.min(window.innerWidth-cw-pad,Math.max(pad,evt.pageX+16));
+  const y=Math.min(window.innerHeight-ch-pad,Math.max(pad,evt.pageY-20));
+  cardEl.style.left=x+"px";cardEl.style.top=y+"px";
+  cardEl.querySelector(".x").onclick=closeCard;
+  setTimeout(()=>document.addEventListener("click",clickAway,{once:true}),0);
+}
+function clickAway(e){if(cardEl&&!cardEl.contains(e.target))closeCard();}
+function closeCard(){if(cardEl){cardEl.remove();cardEl=null;}}
+
+/* ---------- Save + Leaderboard ---------- */
+function registerOwnedTiles(meta){
+  meta.tiles.forEach(id=>{
+    ownedTiles.add(id);
+    tileData[id]={name:meta.name,link:meta.link,logo:meta.logo,country:meta.country};
+  });
+  saveOwned();saveTileData();
+  renderOwnedGlow();renderMiniLogos();updateLeaderboard();
+  document.getElementById("ownedCount").textContent=ownedTiles.size;
+}
+
+function updateLeaderboard(){
+  const buyers={};
+  for(const id in tileData){
+    const d=tileData[id];
+    if(!d.name)continue;
+    if(!buyers[d.name])buyers[d.name]={count:0,logo:d.logo,link:d.link,country:d.country};
+    buyers[d.name].count++;
+  }
+  const ranked=Object.entries(buyers).sort((a,b)=>b[1].count-a[1].count).slice(0,5);
+  const lb=document.getElementById("leaderboard");
+  if(!ranked.length){lb.innerHTML="<div>No buyers yet.</div>";return;}
+  lb.innerHTML=ranked.map(([n,v])=>{
+    const img=(v.logo&&isSafeURL(v.logo))?`<img src='${v.logo}'>`:`<img src='https://upload.wikimedia.org/wikipedia/commons/3/3f/Logo_placeholder.png'>`;
+    const link=(v.link&&isSafeURL(v.link))?`<a href='${v.link}' target='_blank' class='name'>${n}</a>`:`<span class='name'>${n}</span>`;
+    return `<div class='entry' data-buyer='${encodeURIComponent(n)}'>${img}${link}<span class='km'>${v.count} km²</span></div>`;
+  }).join("");
+  lb.querySelectorAll(".entry").forEach(el=>el.addEventListener("click",()=>zoomToBuyer(decodeURIComponent(el.dataset.buyer))));
+}
+
+function zoomToBuyer(name){
+  const ids=Object.keys(tileData).filter(id=>tileData[id].name===name);
+  if(!ids.length)return;
+  const coords=ids.map(id=>{const p=id.split(":");return[+p[1],+p[2]];});
+  const[minX,maxX]=d3.extent(coords,d=>d[0]);
+  const[minY,maxY]=d3.extent(coords,d=>d[1]);
+  const w=svg.node().clientWidth,h=svg.node().clientHeight;
+  const dx=(maxX-minX)||1,dy=(maxY-minY)||1;
+  const cx=(minX+maxX)/2,cy=(minY+maxY)/2;
+  const scale=Math.min(8,0.85/Math.max(dx/w,dy/h));
+  const translate=[w/2-cx*scale,h/2-cy*scale];
+  svg.transition().duration(600).call(zoom.transform,d3.zoomIdentity.translate(translate[0],translate[1]).scale(scale));
+}
+</script>
+</body>
+</html>
